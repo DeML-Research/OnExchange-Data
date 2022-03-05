@@ -7,7 +7,7 @@ import data as dt
 # (pending) Get the list of exchanges with the symbol
 
 # Get public trades from the list of exchanges
-exchanges = ['binance', 'kraken', 'huobi', 'bitfinex']
+exchanges = ['binance']
 symbol = 'BTC/USDT'
 
 # Fetch realtime orderbook data until timer is out (60 secs is default)

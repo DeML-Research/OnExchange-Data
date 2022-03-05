@@ -16,8 +16,7 @@ import ccxt.async_support as ccxt_async
 # --------------------------------------------------------------------------------------------------------- #
 
 def async_data(symbol, exchanges, data_type, execution='async', stop_criteria=None, elapsed_secs=60,
-               output_format='numpy',
-               timestamp_format='timestamp', verbose=True, file_route='Files/'):
+               output_format='numpy', timestamp_format='timestamp', verbose=True, file_route='Files/'):
     """
     Asyncronous OrderBook data fetcher. It will asyncronously catch innovations of transactions whenever they
     occur for every exchange is included in the list exchanges, and return the complete orederbook in a in a
