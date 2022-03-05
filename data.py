@@ -15,7 +15,9 @@ import ccxt.async_support as ccxt_async
 # --------------------------------------------------------------------------- ASYNCRONOUS ORDERBOOK DATA -- # 
 # --------------------------------------------------------------------------------------------------------- #
 
-def order_book(symbol, exchanges, execution='async', stop=None, output_format='numpy', verbose=True):
+def async_data(symbol, exchanges, data_type, execution='async', stop_criteria=None, elapsed_secs=60,
+               output_format='numpy',
+               timestamp_format='timestamp', verbose=True, file_route='Files/'):
     """
     Asyncronous OrderBook data fetcher. It will asyncronously catch innovations of transactions whenever they
     occur for every exchange is included in the list exchanges, and return the complete orederbook in a in a
@@ -23,8 +25,10 @@ def order_book(symbol, exchanges, execution='async', stop=None, output_format='n
 
     Parameters
     ----------
+
     symbol: list
         with the names of instruments or markets to fetch the oredebook from.
+
     exchanges: list
         with the names of exchanges from where the data is intended to be fetched.
     
@@ -33,14 +37,18 @@ def order_book(symbol, exchanges, execution='async', stop=None, output_format='n
                  asyncio and ccxt.async_support
         'parallel': Run a parallel processing to deploy 1 instance for each symbol at each market. Depends
                  on multiprocessing (pending)
-    stop: dict
+    
+    stop_criteria: dict
         Criteria to stop the execution. Default behavior will be to stop after 1 minute of running.
-        'min_count': int 
+        
+        'min_count': int
             Stops when all orderbooks have, at least, this number of registred timestamps.
+        
         'target_timestamp': datetime
             Stops when its reached a specific timestamp.
-        None: (default)
-            Stop when 1 minute has elapsed
+        
+        'elapsed_time': (default)
+            Stop when the elapsed_secs has passed
     
     output_format: str {'numpy', 'dataframe'} (default: 'numpy')
         Options for the output format, both is a dictionary with timestamp as key, values are:
@@ -53,6 +61,7 @@ def order_book(symbol, exchanges, execution='async', stop=None, output_format='n
     
     Returns
     -------
+
     r_data: dict
         A dictionary with the fetched data, with the following structure.
         r_data = {
@@ -69,16 +78,19 @@ def order_book(symbol, exchanges, execution='async', stop=None, output_format='n
 
     References
     ----------
+    
     [1] https://github.com/ccxt/ccxt
     [2] https://docs.python.org/3/library/asyncio.html
 
     """
     
+    # Coherce to a list type when either exchanges or symbols is only a str
+    exchanges = [exchanges] if not isinstance(exchanges, list) else exchanges
+    
     # Store data for every exchange in the list
-    r_data = {'bitfinex': {}, 'kraken': {}}
+    r_data = {i_exchange: {} for i_exchange in exchanges}
 
-    # ----------------------------------------------------------------------------- ASYNCRONOUS REQUESTS -- # 
-    async def async_client(exchange, symbol):
+    async def async_client(exchange, symbol, data_type):
 
         # Await to be inside exchange limits of calls
         # await asyncio.sleep(exchange.rateLimit / 1000)
@@ -97,69 +109,119 @@ def order_book(symbol, exchanges, execution='async', stop=None, output_format='n
         time_f = 0
 
         # Loop until stop criteria is reached
-        while time_f <= 60:
+        while time_f < elapsed_secs:
             
             # Try and await for client response
             try:
 
-                # Fetch, await and get datetime
-                orderbook = await client.fetch_order_book(symbol)
-                datetime = client.iso8601(client.milliseconds())
+                if data_type == 'orderbooks':
+                    
+                    # Fetch, await and get datetime
+                    orderbook = await client.fetch_order_book(symbol)
+                    if timestamp_format == 'timestamp':
+                        datetime = pd.to_datetime(client.milliseconds()*1000000)
+                    elif timestamp_format == 'unix':
+                        datetime = client.milliseconds()
 
-                # Verbosity
-                if verbose:
-                    print(datetime, client.id, symbol, orderbook['bids'][0], orderbook['asks'][0])
+                    # Verbosity
+                    if verbose == 2:
+                        print(datetime, client.id, symbol,
+                            'bid_vol: ', orderbook['bids'][1][1], ' bid_price: ', orderbook['bids'][1][0],
+                            'ask_price: ', orderbook['asks'][0][0], ' ask_vol: ', orderbook['bids'][0][1])
 
-                # Unpack values
-                ask_price, ask_size = np.array(list(zip(*orderbook['asks']))[0:2])
-                bid_price, bid_size = np.array(list(zip(*orderbook['bids']))[0:2])
-                spread = np.round(ask_price - bid_price, 4)
-               
-                # Final data format for the results
-                r_data[client.id].update({datetime: pd.DataFrame({'ask_size': ask_size, 'ask': ask_price,
-                                                                  'bid': bid_price, 'bid_size': bid_size,
-                                                                  'spread': spread}) })
-                # End time
-                time_2 = time.time()
-                time_f = round(time_2 - time_1, 4)
+                    # Unpack values
+                    ask_price, ask_vol = np.array(list(zip(*orderbook['asks']))[0:2])
+                    bid_price, bid_vol = np.array(list(zip(*orderbook['bids']))[0:2])
+                    spread = np.round(ask_price - bid_price, 4)
+                
+                    # Final data format for the results
+                    r_data[client.id].update({datetime: pd.DataFrame({'bid_vol': bid_vol, 'bid_price': bid_price,
+                                                                    'ask_price': ask_price, 'ask_vol': ask_vol}) })
+                    # End time
+                    time_2 = time.time()
+                    time_f = round(time_2 - time_1, 4)
+
+                    # Close client
+                    await client.close()
+
+                elif data_type == 'publictrades':
+                    
+                    if verbose == 2:
+                        print('Get publictrades in: ', exchange, ' for the symbol: ', symbol)
+
+                    # Fetch, await and get datetime
+                    publictrades = await client.fetch_trades(symbol)
+                     
+                    # Close client
+                    await client.close()
+
+                    if timestamp_format == 'timestamp':
+                        datetime = pd.to_datetime(client.milliseconds()*1000000)
+                    elif timestamp_format == 'unix':
+                        datetime = client.milliseconds()
+
+                    # Get all publictrades in a dataframe
+                    dct_publictrades = {}
+                    for i_trade in publictrades:
+                        dct_publictrades.update({ pd.to_datetime(i_trade['timestamp']*1000000):
+                                                  {'trade_id': i_trade['id'], 'side': i_trade['side'],
+                                                  'price': i_trade['price'], 'amount': i_trade['amount']}})
+
+                    # Store all dataframes as final result
+                    r_data[client.id] = pd.DataFrame(dct_publictrades).T
+
+                    # End time
+                    time_2 = time.time()
+                    time_f = round(time_2 - time_1, 4)
+                    
 
             # In case something bad happens with client
             except Exception as e:
                 print(type(e).__name__, e.args, str(e))
                 pass
-
-        # Close client
+        
         await client.close()
 
-    # ------------------------------------------------------------------------------ MULTIPLE ORDERBOOKS -- #
-    async def multi_orderbooks(exchanges, symbol):
+    # ------------------------------------------------------------------------------ MULTIPLE ORDERBOOKS -- # 
+    async def multi_data(exchanges, symbol):
         # A list of routines (and parameters) to run
-        input_coroutines = [async_client(exchange, symbol) for exchange in exchanges]
+        input_coroutines = [async_client(exchange, symbol, data_type) for exchange in exchanges]
         # wait for responses
         await asyncio.gather(*input_coroutines, return_exceptions=True)
 
     # Run event loop in async
     if execution=='async':
-        asyncio.get_event_loop().run_until_complete(multi_orderbooks(exchanges, symbol))
+        if verbose == 1 and data_type == 'orderbooks':
+            print('Order Books data fetch')
+
+        if verbose == 1 and data_type == 'publictrades':
+            print('Public Trades data fetch')
+
+        asyncio.get_event_loop().run_until_complete(multi_data(exchanges, symbol))
+
+    # Run multiple events in parallel
+    elif execution=='parallel':
+        raise ValueError('Only supported async')
     
     # Raise error in case of other value
     else:
         raise ValueError(execution, 'is not supported as a type of execution')
 
-    # ----------------------------------------------------------------------------------- OUTPUT FORMAT -- #
+    # ----------------------------------------------------------------------------------- TYPE OF OUTPUT -- #
 
-    if output_format == 'numpy':
-        print('this')
+    # A JSON file writen in directory
+    if output_format == 'json':
+        # Serializing json 
+        json_object = pd.DataFrame(r_data).to_json()
+        # Label and file creation
+        label = str(pd.to_datetime(time.time()*1e9))[:19].replace(' ', 'T')
+        with open(file_route + '/orderbooks_' + label + '.json', 'w') as outfile:
+            outfile.write(json_object)
 
+    # Just return the DataFrame
+    elif output_format == 'inplace':
         return r_data
-    elif output_format == 'dataframe':
-        print('this')
-        
-        return r_data
-
-# Small test
-exchanges = ["bitfinex", "kraken"]
-symbol = 'BTC/EUR'
-
-# Massive download of OrderBook data
-data = order_book(symbol=symbol, exchanges=exchanges, output='inplace', stop=None, verbose=True)
+    
+    # Invalid output
+    else:
+        raise ValueError('Invalid output value')
